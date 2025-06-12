@@ -1,0 +1,451 @@
+ Cancer remains a global health challenge, with treatment outcomes varying widely due to tumor
+ heterogeneity, genetic variability, and drug resistance mechanisms. Accurate prediction of drug
+ responses, measured as the logarithm of the half-maximal inhibitory concentration (ln(IC50)), is
+ pivotal for personalized medicine, enabling tailored therapies that maximize efficacy and minimize
+ toxicity. Traditional empirical testing, such as in vitro assays, is resource-intensive, time-consuming,
+ and lacks generalizability across diverse cancer types and drugs. Computational approaches,
+ particularly deep learning, offer scalable solutions by modeling complex drug-cancer interactions,
+ but they often struggle with integrating multimodal data and ensuring generalizability.
+ We introduce TransFusion, a novel deep learning framework designed to predict ln(IC50)
+ with unprecedented accuracy and generalizability. TransFusion integrates multimodal inputs: drug
+ molecular structures via SMILES strings processed by ChemBERTa-77M-MLM, a transformer
+based model pre-trained on 77 million molecules, and multi-omics data (gene expression, mutation
+ profiles, methylation patterns) from cancer cell lines. By leveraging transfer learning and so
+phisticated attention mechanisms, TransFusion captures structural and functional drug properties
+ alongside biological contexts, achieving state-of-the-art performance.
+ This paper provides a comprehensive exploration of TransFusion’s design, implementation, and
+ evaluation. Our contributions include:
+ • Amultimodal fusion strategy integrating chemical and multi-omics data for robust predictions.
+ • Transfer learning to enhance performance with limited training data, leveraging pre-trained
+ models.
+ • Rigorous validation on GDSC and CCLE datasets, demonstrating generalizability across
+ Vol. , No. ,
+ Page 1
+cancer types.
+ • Interpretable insights into drug efficacy via chemical substructure and attention weight anal
+ysis.
+ We detail the methodology, experimental setup, results, and implications, emphasizing TransFu
+sion’s potential to transform precision oncology through data-driven insights.
+ 2. Background and Related Work
+ Cancer drug response prediction aims to estimate the efficacy of a drug on a cancer cell line,
+ typically quantified as ln(IC50). Recent deep learning advancements have significantly advanced
+ this field. Xia et al. [1] proposed TransCDR, a transfer learning model that enhances generalizability
+ by leveraging pre-trained molecular models, achieving robust predictions for unseen drugs and
+ cell lines. Li et al.’s DIPK [2] integrates gene interaction networks with self-supervised learning,
+ outperforming traditional methods in novel scenarios with a reported Pearson correlation of 0.89.
+ Zheng et al.’s GCFANet [3] employs graph convolutional networks and contrastive learning for
+ multi-omics data fusion, emphasizing cross-modal feature aggregation with a Concordance Index
+ of 0.90. Baptista et al. [4] demonstrated the efficacy of Graph Convolutional Networks (GCNs)
+ and Deep Neural Networks (DNNs) in modeling multi-omics data, achieving an RMSE of 1.25
+ on GDSC. Song et al.’s GNNDRP [5] integrates biochemical features via graph neural networks,
+ reporting a Pearson correlation of 0.87. Gerdes et al.’s DRUML [6] ranks anti-cancer drugs using
+ normalized distance metrics, offering high predictive accuracy with a Spearman correlation of
+ 0.85.
+ Despite these advances, challenges persist:
+ • Limited Multimodal Integration: Most models focus on single data modalities (e.g., gene
+ expression or drug structure), neglecting the synergy of chemical and biological data.
+ • Generalization Issues: Models often overfit to specific cancer types or drugs, reducing
+ applicability in diverse clinical scenarios.
+ • Interpretability Gaps: Few models provide insights into the chemical or biological factors
+ driving predictions, limiting their utility in drug discovery.
+ TransFusion addresses these gaps by combining ChemBERTa-77M-MLM for drug representation,
+ multi-omics processing, and attention-based fusion, offering superior predictive power, generaliz
+ability, and interpretability. Our approach leverages transfer learning to mitigate data scarcity and
+ attention mechanisms to highlight key features, setting it apart from existing methods.
+ 3. Methodology
+ 3.1. Problem Formulation
+ Given a drug d represented by its SMILES string s and a cancer cell line c characterized by
+ multi-omics data (gene expression G ∈ Rng, mutations M ∈ Rnm, methylation P ∈ Rnp), we aim
+ to predict the logarithmic drug response:
+ f(d,c) → ln(IC50)
+ (1)
+ where f is a deep learning model mapping multimodal inputs to a continuous value, and ng,nm,np
+ are feature dimensions (e.g., ng ≈ 18,000 for gene expression, nm ≈ 1,295 for mutations, np ≈
+ 12,456 for methylation).
+ 3.2. TransFusion Architecture
+ TransFusion comprises five modules: data input, preprocessing, drug representation, cell line
+ representation, and multimodal fusion. Each module is designed to maximize feature extraction
+ and interaction modeling, ensuring robust predictions.
+ Page 2
+3.2.1. Data Input Layer
+ Inputs include:
+ • Drug Data: SMILES strings (e.g., “CC(=O)OC1=CC=CC=C1C(=O)O” for aspirin), encoding
+ molecular structures such as atoms, bonds, and stereochemistry.
+ • Cell Line Data: Multi-omics features:– Gene expression (G): Continuous RNA expression levels for 17,737 genes.– Mutations (M): Binary or categorical mutation profiles for 1,295 genetic variants.– Methylation (P): Epigenetic modification patterns across 12,456 sites.
+ • Response Data: ln(IC50) values, logarithmically transformed to ensure numerical stability
+ and reduce skewness in the response distribution.
+ 3.2.2. Data Preprocessing
+ SMILES strings are tokenized using ChemBERTa-77M-MLM’s tokenizer, producing sequences
+ of substructure tokens (e.g., [C], [O], [c]) and attention masks to handle variable-length inputs.
+ Multi-omics data undergo extensive preprocessing to ensure quality and consistency:
+ • Normalization: Z-score normalization per feature to standardize scales:
+ x′ = x−µ
+ σ
+ where µ is the mean and σ is the standard deviation, computed across the training set.
+ (2)
+ • Imputation: Missing values (e.g., 5% in methylation data) are imputed using the feature’s
+ mean to preserve data integrity.
+ • Dimensionality Reduction: Principal Component Analysis (PCA) reduces high-dimensional
+ omics data to 512 components per modality, retaining 95% variance:
+ GPCA = UT
+ kG, where Uk contains top k eigenvectors
+ This mitigates the curse of dimensionality and reduces computational overhead.
+ (3)
+ • Outlier Removal: Features with values beyond 1.5 times the interquartile range are clipped
+ to ensure robustness.
+ 3.2.3. Drug Representation Module
+ ChemBERTa-77M-MLM, a transformer model pre-trained on 77 million molecules via masked
+ language modeling (MLM), generates contextual embeddings for SMILES strings:
+ hd =ChemBERTa-77M-MLM(s) ∈ Rdh
+ (4)
+ where dh = 768 is the hidden dimension. The model architecture includes 12 transformer layers,
+ each with 12 attention heads, applying multi-head self-attention:
+ Self-Attention(Qd,Kd,Vd) = softmax QdKT
+ d
+ √
+ dk
+ Vd
+ (5)
+ with Qd = sWQd
+ , Kd = sWKd
+ , Vd = sWVd
+ , WQd
+ ,WKd
+ ,WVd 
+∈ Rdh× dk, and dk = dh/heads = 64.
+ This mechanism captures long-range dependencies in molecular structures, such as interactions
+ between distant functional groups (e.g., benzene rings and carboxyl groups), enhancing the
+ representation of chemical properties.
+ 3.2.4. Cell Line Representation Module
+ Each omics modality is processed through modality-specific fully connected (FC) layers with ReLU
+ activation to project features into a common subspace:
+ hg =ReLU(FCg(G)), hm = ReLU(FCm(M)), hp = ReLU(FCp(P))
+ (6)
+ Page 3
+whereFCg :R512→Rdo,do=256,andsimilarlyforMandP.Thelayersconsistof512neurons
+ withadropout rateof0.2topreventoverfitting.Featuresareconcatenatedtoformaunifiedcell
+ linerepresentation:
+ hc=Concat(hg,hm,hp)∈Rdc (7)
+ wheredc=3×do=768.Atransformerencoderwith4layersand12attentionheadsrefineshc
+ bymodelinginteractionsacrossmodalities:
+ h′
+ c=TransformerEncoder(hc,L=4,H=12) (8)
+ Eachtransformerlayerappliesmulti-headself-attentionandfeed-forwardnetworks,withlayernor
+malizationandresidualconnections, tocapturecross-modaldependencies(e.g.,geneexpression
+ influencingmethylationpatterns).
+ 3.2.5.MultimodalFusionandPrediction
+ Cross-modalattentionintegratesdrugandcell lineembeddingstocapturetheir interactions:
+ Attention(Q,K,V)=softmax QKT
+ √dk
+ V (9)
+ whereQ=hdWQ,K=h′
+ cWK,V=h′
+ cWV,WQ,WK,WV∈Rdh×dk,anddk=64.Thismechanism
+ assignshigherweights todrug features that alignwithbiologically relevant cell line features,
+ enablingthemodel tofocusonkeyinteractions(e.g.,adrug’spolargroupinteractingwithacell
+ line’soverexpressedgene). The fused representation isprocessedbyamultilayer perceptron
+ (MLP)with3layers(512,256,1neurons):
+ ln(IC50)=MLP(Attention(hd,h′
+ c)) (10)
+ TheMLPusesReLUactivationsandbatchnormalizationtostabilizetraining.Themodel istrained
+ usingHuber losstohandleoutliersintheln(IC50)distribution:
+ L(y,ˆ y)=
+ (
+ 1
+ 2(y−ˆ y)2 if |y−ˆ y|≤δ
+ δ|y−ˆ y|−1
+ 2δ2 otherwise (11)
+ withδ=1.0.Dropout (0.3)andweightdecay(1×10−5)areappliedtopreventoverfitting.
+ 3.3. CompoundAnalysisPipeline
+ Tointerpretdrugefficacy,weanalyzechemicalsubstructuresandsimilaritiesusingasystematic
+ pipeline.TheprocessisformalizedinAlgorithm1,whichleveragesRDKit’scheminformaticstools
+ toparseSMILESstrings,computemoleculardescriptors,andidentifysubstructures.
+ Page4
+Algorithm 1 Compound Analysis Pipeline
+ 1: Input: Predicted ln(IC50), SMILES strings
+ 2: Load predictions and SMILES using RDKit library
+ 3: Rank drugs by ln(IC50) per cell line in ascending order
+ 4: Select top 25% as effective drugs (lower ln(IC50) indicates higher potency)
+ 5: Generate all pairwise combinations of effective drugs
+ 6: for each drug pair (di,dj) do
+ 7:
+ 8:
+ 9:
+ 10:
+ Extract Murcko scaffolds using RDKit’s MurckoScaffoldSmiles
+ Compute Morgan fingerprints (radius=2, bits=2048) for structural comparison
+ Calculate Tanimoto similarity: T(di,dj) = |Fi∩Fj|
+ |Fi∪Fj| , where Fi,Fj are fingerprints
+ Identify functional groups using SMARTS patterns (e.g., ‘[cH0]’ for benzene, ‘[C=O]’ for
+ ketones)
+ 11: end for
+ 12: Aggregate functional group frequencies across all effective drugs
+ 13: Compute statistics (mean, std. dev.) of Tanimoto similarities
+ 14: Output: Functional group frequencies, Tanimoto similarity statistics
+ The Tanimoto similarity quantifies structural diversity among effective drugs, while functional
+ group analysis highlights chemical motifs driving efficacy. This pipeline provides actionable insights
+ for drug design by identifying common substructures and their prevalence.
+ 3.4. Model Interpretability
+ To enhance interpretability, we analyze attention weights from the cross-modal attention layer
+ (Eq. 9). The attention matrix A = softmax QKT
+ √
+ dk
+ ∈Rdh× dh indicates the alignment between drug
+ features (rows) and cell line features (columns). We compute feature importance scores for each
+ feature f (e.g., a specific gene or substructure):
+ dh
+ X
+ If =
+ i=1
+ Ai,f · Vf 2
+ (12)
+ where If is the importance score, Ai,f is the attention weight, and Vf is the value vector component
+ for feature f. High If values highlight features contributing significantly to the prediction, such as
+ biologically relevant genes or drug substructures. These scores are validated by correlating them
+ with known biomarkers (e.g., EGFR mutations in lung cancer), ensuring the model’s biological
+ plausibility. The results of this analysis are further explored in Section 5.3.
+ 4. Experimental Setup
+ 4.1. Datasets
+ We evaluate TransFusion using two benchmark datasets:
+ • GDSC (Genomics of Drug Sensitivity in Cancer): Contains 990 cell lines, 407 drugs,
+ and 198,058 drug-cell line pairs with ln(IC50) values. Multi-omics data include 17,737 gene
+ expression features (RNA-Seq data), 1,295 mutation profiles (binary indicators of genetic
+ variants), and 12,456 methylation sites (beta values from Illumina arrays). The dataset covers
+ 30 cancer types, with a focus on common cancers like lung and breast.
+ • CCLE (Cancer Cell Line Encyclopedia): External validation dataset with 1,036 cell lines,
+ 24 drugs, and 10,512 drug-cell line pairs. It includes diverse cancer types (e.g., rhabdoid,
+ bile duct, neuroblastoma), with similar multi-omics features as GDSC but a smaller drug set,
+ testing TransFusion’s generalizability.
+ Both datasets were preprocessed to align features across GDSC and CCLE, ensuring consistency
+ in gene identifiers and methylation probes. Outliers were removed using the interquartile range
+ Page 5
+method:valuesbeyondQ3+1.5×(Q3−Q1)orbelowQ1−1.5×(Q3−Q1)wereclipped,where
+ Q1andQ3arethe25thand75thpercentiles.
+ 4.2. ImplementationDetails
+ TransFusionwas implementedinPyTorch2.0andtrainedonNVIDIAA100GPUs(40GBmem
+ory, 1410MHzclockspeed). Training took8hoursper foldper hyperparameter configuration,
+ totaling120hoursacrossallexperiments(5folds×3configurations×8hours).Weevaluated
+ threehyperparameterconfigurations(HC-1,HC-2,HC-3)usingagridsearchover thefollowing
+ parameters:
+ • LearningRate:{0.0003,0.0005,0.0007},controllingthestepsizeforgradientdescent.
+ • BatchSize:{32,64,128},affectinggradientstabilityandmemoryusage.
+ •WeightDecay:{1×10−6,1×10−5,2×10−5},regularizingmodelweightstopreventoverfitting.
+ • LossFunction:Huber (primary, robust tooutliers),MSE(secondary, forcomparison).
+ Earlystoppingwasappliedwithapatienceof 5epochs (max100epochs), halting training if
+ validationRMSEdidnot improve.Thebestconfiguration,HC-1(learningrate0.0005,batchsize
+ 64,weight decay1×10−5,Huber loss),wasselectedbasedon the lowest validationRMSE
+ acrossfolds.HC-1consistentlyoutperformedothersduetoitsbalancedlearningrateandbatch
+ size,whichoptimizedgradientupdateswithoutoverfitting.
+ Thehyperparameterconfigurationsaresummarizedbelow.
+ TABLEI:HyperparameterConfigurations
+ Parameter HC-1 HC-2 HC-3
+ LearningRate 0.0005 0.0007 0.0003
+ WeightDecay 1×10−5 1×10−6 2×10−5
+ BatchSize 64 128 32
+ LossFunction Huber Huber MSE
+ TrainingTime(hours/fold) 8 8 8
+ 4.3. EvaluationMetrics
+ Performancewasassessedusingmultiplemetricstocapturedifferentaspectsofpredictionquality:
+ •MeanSquaredError (MSE):Measuresaveragesquarederror:
+ MSE= 1
+ n
+ n X
+ i=1
+ (yi−ˆ yi)2 (13)
+ • RootMeanSquaredError (RMSE):SquarerootofMSE,providingerror inthesameunits
+ asln(IC50):
+ RMSE=
+ √
+ MSE (14)
+ • PearsonCorrelation:Measureslinearcorrelationbetweenpredictedandtrueln(IC50):
+ r=
+ P(yi−¯ y)(ˆ yi−¯ ˆ y) pP(yi−¯ y)2
+ P(ˆ yi−¯ ˆ y)2
+ (15)
+ • SpearmanCorrelation:Rank-basedcorrelation, capturingmonotonic relationships, useful
+ fornon-linear trendsindrugresponse.
+ Page6
+• Concordance Index (CI): Measures ranking consistency of predicted ln(IC50) values, critical
+ for drug ranking applications:
+ P
+ CI =
+ yi > ˆ yj)
+ i,j:yi>yj 
+I(ˆ
+ P
+ i,j:yi>yj 
+1
+ (16)
+ These metrics collectively ensure a comprehensive evaluation, balancing error magnitude (MSE,
+ RMSE), correlation (Pearson, Spearman), and ranking accuracy (CI).
+ 5. Results
+ 5.1. Cross-Validation Performance
+ Five-fold cross-validation on the GDSC dataset evaluated TransFusion’s robustness across 198,058
+ drug-cell line pairs. For the best configuration (HC-1), average metrics across folds were:
+ • MSE: 1.2339±0.0512, indicating low prediction error.
+ • RMSE: 1.1098±0.0512, reflecting error in ln(IC50) units.
+ • Pearson Correlation: 0.9159 ± 0.0082, showing strong linear agreement.
+ • Spearman Correlation: 0.8922 ±0.0091, confirming robust monotonic relationships.
+ • Concordance Index: 0.8640±0.0063, demonstrating high ranking accuracy.
+ Detailed per-fold results are presented below. Fold 4 achieved the highest Pearson correlation
+ (0.9273) due to a favorable distribution of cancer types (e.g., higher representation of lung cancer,
+ where TransFusion excels). The standard deviations indicate low variability, underscoring the
+ model’s stability across different data splits.
+ TABLE II: Cross-Validation Results (HC-1) on GDSC
+ Fold
+ MSE RMSE Pearson Spearman Concordance
+ 1
+ 1.1905 1.0911 0.9190
+ 2
+ 3
+ 4
+ 5
+ 1.2149 1.1022 0.9167
+ 1.3096 1.1444 0.9104
+ 1.0756 1.0371 0.9273
+ 1.3791 1.1743 0.9060
+ 0.8938
+ 0.8923
+ 0.8890
+ 0.8652
+ 0.8637
+ 0.8614
+ 0.9045
+ 0.8816
+ 0.8734
+ 0.8563
+ Average 1.2339 1.1098 0.9159
+ Std. Dev. 0.0512 0.0512 0.0082
+ 0.8922
+ 0.8640
+ 0.0091
+ 5.2. External Validation
+ 0.0063
+ External validation on the CCLE dataset assessed TransFusion’s generalizability across 10,512
+ drug-cell line pairs, covering a diverse set of cancer types. TransFusion achieved a Pearson
+ correlation of 0.9177, outperforming baselines like DIPK (0.89) and GCFANet (0.90). Cancer
+type-specific performance is summarized below. TransFusion excels in rare cancers like bile
+ duct (concordance 0.978), where data scarcity typically challenges prediction models. Lower
+ performance in breast cancer (Pearson 0.692) may be attributed to higher heterogeneity and
+ fewer training samples for this subtype in GDSC.
+ Page 7
+TABLE III: Cancer-Type Performance on CCLE
+ Cancer Type
+ Pearson Concordance
+ Rhabdoid
+ 0.846
+ Bile Duct
+ Thyroid
+ Neuroblastoma
+ Lung
+ Breast
+ 0.834
+ 0.833
+ 0.826
+ 0.734
+ 0.692
+ 0.789
+ 0.978
+ 0.812
+ 0.775
+ 0.777
+ 0.748
+ 5.3. Compound Analysis
+ The compound analysis pipeline (Algorithm 1) identified chemical substructures driving drug
+ efficacy by analyzing the top 25% of drugs with the lowest predicted ln(IC50) values (indicating
+ high potency). Key findings include:
+ • Benzene Rings: Present in 78.3% of effective drugs, critical for aromatic interactions with
+ target proteins, enhancing binding affinity.
+ • Ketone Groups: Found in 46.5% of drugs, associated with electrophilic reactivity, often acting
+ as hydrogen bond acceptors.
+ • AmineGroups:Present in 44.9% of drugs, improving solubility and enabling ionic interactions
+ with biological targets.
+ • Amide Groups: Identified in 29.0% of drugs, contributing to hydrogen bonding and structural
+ stability in protein-ligand complexes.
+ The average Tanimoto similarity among effective drug pairs was 0.13 (std. dev. 0.08), indicating
+ high structural diversity among potent drugs. This suggests multiple chemical pathways can
+ achieve efficacy, a valuable insight for drug design. Murcko scaffold analysis revealed common
+ frameworks like pyridine (present in 32% of effective drugs) and indole (18%), which are known
+ to enhance pharmacological activity in anti-cancer compounds.
+ 5.4. Interpretability Insights
+ Attention weight analysis (Eq. 12) provided deep insights into the features driving TransFusion’s
+ predictions. Feature importance scores (If) were computed for both drug and cell line features,
+ revealing:
+ • Drug Features: High If scores for aromatic rings (e.g., benzene, If = 0.85) and polar
+ groups (e.g., amines, If = 0.62), correlating with binding affinity to cancer targets. These
+ substructures align with known pharmacophores in anti-cancer drugs, such as tyrosine kinase
+ inhibitors.
+ • Cell Line Features: Elevated If scores for oncogenes like KRAS (If = 0.91) and TP53 (If =
+ 0.87), which are frequently mutated in cancers like lung and breast, respectively. Methylation
+ sites linked to drug resistance, such as those near MGMT (If = 0.79), also showed high
+ importance, consistent with epigenetic regulation of chemotherapy response.
+ The high If scores for KRAS and TP53 were validated by their known roles in cancer progression,
+ as reported in the COSMIC database, confirming TransFusion’s biological relevance. Similarly, the
+ emphasis on benzene rings aligns with their prevalence in FDA-approved cancer drugs, reinforcing
+ the model’s chemical plausibility.
+ 6. Discussion
+ TransFusion outperforms state-of-the-art models like DIPK [2] (Pearson 0.89), GCFANet [3] (0.90),
+ and GNNDRP [5] (0.87) due to its multimodal fusion and transfer learning capabilities. The high
+ Page 8
+Pearson correlation (0.9159) and Concordance Index (0.8640) on GDSC, and 0.9177 on CCLE,
+ reflect its ability to model complex drug-cancer interactions with high accuracy. Its performance
+ on rare cancers (e.g., bile duct, concordance 0.978) addresses critical gaps in treatment planning
+ for understudied diseases, where data scarcity often limits predictive models.
+ The compound analysis provides actionable insights for drug discovery:
+ • Chemical Diversity: The low Tanimoto similarity (0.13) among effective drugs suggests that
+ multiple chemical pathways can achieve high potency, encouraging exploration of diverse
+ molecular scaffolds like pyridine and indole.
+ • Functional Groups: The prevalence of benzene (78.3%) and ketone groups (46.5%) in
+forms medicinal chemistry strategies, as these groups enhance binding affinity and reactivity,
+ respectively.
+ The interpretability analysis further enhances TransFusion’s utility. High feature importance scores
+ for oncogenes like KRAS and TP53 align with their established roles in cancer progression,
+ enabling biomarker discovery. For instance, KRAS mutations are predictive of resistance to EGFR
+ inhibitors in lung cancer, a finding TransFusion independently highlights through attention weights.
+ Similarly, the emphasis on benzene rings and amines in drug structures aligns with their roles in
+ FDA-approved cancer therapies, such as imatinib, guiding drug repurposing efforts.
+ Limitations include:
+ • Data Scope: TransFusion relies on cell line data, which may not fully capture patient-specific
+ factors like tumor microenvironment or immune interactions. Integrating patient-derived xenograft
+ (PDX) or clinical data could enhance personalization.
+ • Computational Cost: Training required 120 hours on high-end GPUs, which may be pro
+hibitive for resource-limited settings. However, inference is fast (0.1s per prediction), making
+ the model practical for real-time applications.
+ • Feature Engineering: While PCA reduced dimensionality, manual feature selection (e.g.,
+ cancer-specific gene panels) could further improve performance.
+ Future work will focus on:
+ • Integrating pharmacogenomic data to capture patient-specific responses.
+ • Exploring federated learning to enable privacy-preserving training across institutions.
+ • Developing automated pipelines for biomarker extraction, leveraging attention weights to
+ identify novel therapeutic targets.
+ TransFusion’s combination of predictive accuracy, generalizability, and interpretability makes it a
+ powerful tool for advancing precision oncology.
+ 7. Conclusion
+ TransFusion represents a significant advancement in cancer drug response prediction, achiev
+ing a Pearson correlation of 0.9159 on GDSC and 0.9177 on CCLE. Its multimodal fusion of
+ ChemBERTa-77M-MLM drug embeddings and multi-omics data, coupled with attention mech
+anisms, ensures robust and interpretable predictions across diverse cancer types. The com
+pound analysis reveals chemical insights, such as the prevalence of benzene rings and diverse
+ molecular scaffolds, guiding drug design. Attention weight analysis highlights biologically relevant
+ features like KRAS and TP53, facilitating biomarker discovery and drug repurposing. Despite
+ computational costs, TransFusion’s fast inference and scalability position it as a cornerstone for
+ precision oncology, drug discovery, and personalized treatment planning. Future enhancements
+ will integrate patient-specific data and explore federated learning, further bridging the gap between
+ computational predictions and clinical practice.
+ Page 9
+Acknowledgements
+ We thank Dr. Nishat A. Ansari and Dr. Prem Lal Patel for their guidance, and our families for their
+ unwavering support. This work was conducted under the guidance of Mrs. Puja Gudadhe.
+ References
+ [1] X. Xia, C. Zhu, and F. Zhong, “TransCDR: A deep learning model for enhancing the generalizability of drug activity
+ prediction,” Nature, 2023.
+ [2] P. Li, Z. Jiang, T. Liu, X. Liu, H. Qiao, and X. Yao, “Improving drug response prediction via integrating gene relationships
+ with deep learning,” Bioinformatics, 2022.
+ [3] X. Zheng, M. Wang, K. Huang, and E. Zhu, “Global and cross-modal feature aggregation for multi-omics data
+ application,” Inform. Sci., 2023.
+ [4] D. Baptista, P. G. Ferreira, and M. Rocha, “Deep learning for drug response prediction in cancer,” Brief. Bioinform.,
+ 2021.
+ [5] C. Song, Y. Zhang, and Z. Li, “GNNDRP: Graph neural network for drug response prediction,” IEEE Trans. Comput.
+ Biol. Bioinform., 2023.
+ [6] H. Gerdes, P. Casado, and A. Dokal, “Drug ranking using machine learning systematically predicts the efficacy of
+ anti-cancer drugs,” Nature Commun., 2022
